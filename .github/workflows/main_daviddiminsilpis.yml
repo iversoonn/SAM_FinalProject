@@ -13,15 +13,19 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read #This is required for actions/checkout
+      contents: read # required for actions/checkout
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      # ---------- PHP DEPENDENCIES ----------
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          php-version: '8.4'            # MATCHES Azure runtime
+          extensions: mbstring, pdo_mysql, intl, gd
+          coverage: none
 
       - name: Check if composer.json exists
         id: check_files
@@ -29,30 +33,52 @@ jobs:
         with:
           files: 'composer.json'
 
-      - name: Run composer install if composer.json exists
+      - name: Install PHP dependencies (no dev)
         if: steps.check_files.outputs.files_exists == 'true'
-        run: composer validate --no-check-publish && composer install --prefer-dist --no-progress
+        run: |
+          composer validate --no-check-publish
+          composer install --no-dev --prefer-dist --no-progress --no-interaction
 
+      # ---------- FRONTEND / VITE BUILD ----------
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'            # Compatible with your vite / plugins
 
+      - name: Install frontend dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f package.json ]; then
+            npm install
+          fi
+
+      - name: Build frontend assets (Vite)
+        run: |
+          if [ -f package.json ]; then
+            npm run build
+          fi
+
+      # ---------- PACKAGE ARTIFACT ----------
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
           name: php-app
-          path: .
+          path: .                       # includes vendor/ and public/build/
 
   deploy:
     runs-on: ubuntu-latest
     needs: build
     permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
+      id-token: write   # required for requesting the JWT
+      contents: read    # required for actions/checkout
 
     steps:
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
         with:
           name: php-app
-      
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -60,11 +86,10 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E342760F392B4AC1BFC464A24EE5DFA7 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_2AEA26EC42D54E8D8F9B489584A246E5 }}
 
-      - name: 'Deploy to Azure Web App'
+      - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
           app-name: 'daviddiminsilpis'
           slot-name: 'Production'
           package: .
-          
